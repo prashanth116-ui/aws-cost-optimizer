@@ -3,29 +3,47 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from styles import inject_styles, page_header, section_header, chart_header, metrics_row
 
 st.set_page_config(page_title="Terraform Generator", page_icon="🏗️", layout="wide")
+inject_styles()
 
-st.title("Terraform Output Generator")
-st.caption("Generate Infrastructure as Code to implement rightsizing recommendations")
+page_header("🏗️ Terraform Generator", "Generate Infrastructure as Code to implement rightsizing recommendations")
 
 
 def load_data():
     """Load data from session state."""
+    if "sample_df" in st.session_state:
+        return st.session_state["sample_df"]
     if "report_file" in st.session_state:
-        return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        try:
+            return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        except:
+            return None
     return None
 
 
 df = load_data()
 
 if df is None:
-    st.info("Please upload a report from the main page to generate Terraform code.")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>No data loaded.</strong> Please go to the Home page and load sample data or upload a report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # Filter to servers with recommendations
 if "recommended_type" not in df.columns:
-    st.warning("No recommendation data available")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>No recommendation data</strong> available in this report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 recs_df = df[df["recommended_type"].notna()].copy()
@@ -35,7 +53,7 @@ if len(recs_df) == 0:
     st.stop()
 
 # Configuration
-st.header("Configuration")
+section_header("Configuration")
 
 col1, col2 = st.columns(2)
 
@@ -49,13 +67,12 @@ with col1:
     include_tags = st.checkbox("Preserve existing tags", value=True)
 
 with col2:
-    # Server selection
-    st.markdown("### Select Servers")
+    chart_header("Select Servers")
 
     risk_filter = st.multiselect(
         "Filter by risk level:",
-        options=recs_df["risk_level"].dropna().unique().tolist() if "risk_level" in recs_df.columns else [],
-        default=["low"] if "low" in recs_df["risk_level"].values else []
+        options=list(recs_df["risk_level"].dropna().unique()) if "risk_level" in recs_df.columns else [],
+        default=["low"] if "risk_level" in recs_df.columns and "low" in recs_df["risk_level"].values else []
     )
 
     if risk_filter and "risk_level" in recs_df.columns:
@@ -68,7 +85,11 @@ with col2:
     )
 
 if not selected_servers:
-    st.warning("Please select at least one server.")
+    st.markdown("""
+    <div class="info-box warning">
+        Please select at least one server.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 selected_df = recs_df[recs_df["hostname"].isin(selected_servers)]
@@ -76,7 +97,7 @@ selected_df = recs_df[recs_df["hostname"].isin(selected_servers)]
 st.divider()
 
 # Generate output
-st.header("Generated Code")
+section_header("Generated Code")
 
 
 def generate_terraform(servers_df, include_backup=True, include_tags=True):
@@ -330,7 +351,7 @@ st.code(code, language=lang, line_numbers=True)
 
 # Download button
 st.download_button(
-    label=f"Download {output_format}",
+    label=f"📥 Download {output_format}",
     data=code,
     file_name=f"rightsizing_{datetime.now().strftime('%Y%m%d')}.{file_ext}",
     mime="text/plain"
@@ -339,26 +360,24 @@ st.download_button(
 st.divider()
 
 # Summary
-st.header("Implementation Summary")
+section_header("Implementation Summary")
 
-col1, col2, col3 = st.columns(3)
+total_savings = selected_df["monthly_savings"].sum()
 
-with col1:
-    st.metric("Servers to Modify", len(selected_df))
-
-with col2:
-    total_savings = selected_df["monthly_savings"].sum()
-    st.metric("Monthly Savings", f"${total_savings:,.2f}")
-
-with col3:
-    st.metric("Yearly Savings", f"${total_savings * 12:,.2f}")
+st.markdown(metrics_row([
+    ("🖥️", len(selected_df), "Servers to Modify"),
+    ("💵", f"${total_savings:,.2f}", "Monthly Savings", "green"),
+    ("📅", f"${total_savings * 12:,.2f}", "Yearly Savings", "green"),
+]), unsafe_allow_html=True)
 
 # Warnings
-st.warning("""
-**Before applying these changes:**
-1. Review each change carefully
-2. Ensure you have recent backups
-3. Schedule during maintenance windows
-4. Have a rollback plan ready
+st.markdown("""
+<div class="info-box warning">
+<strong>Before applying these changes:</strong><br>
+1. Review each change carefully<br>
+2. Ensure you have recent backups<br>
+3. Schedule during maintenance windows<br>
+4. Have a rollback plan ready<br>
 5. Monitor instances after resizing
-""")
+</div>
+""", unsafe_allow_html=True)

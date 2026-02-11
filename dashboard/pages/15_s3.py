@@ -5,15 +5,17 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from styles import inject_styles, page_header, section_header, chart_header, metrics_row
 
 st.set_page_config(page_title="S3 Analysis", page_icon="🪣", layout="wide")
+inject_styles()
 
-st.markdown("""
-    <h1 style="color: #3B48CC;">🪣 S3 Storage Analysis</h1>
-    <p style="color: #666;">Optimize storage classes, identify unused buckets, and implement lifecycle policies</p>
-""", unsafe_allow_html=True)
+page_header("🪣 S3 Storage Analysis", "Optimize storage classes, identify unused buckets, and implement lifecycle policies")
 
-# S3 Storage Class Pricing (per GB-month, us-east-1)
 S3_PRICING = {
     "STANDARD": {"storage": 0.023, "retrieval": 0.0, "min_days": 0},
     "INTELLIGENT_TIERING": {"storage": 0.023, "retrieval": 0.0, "min_days": 0},
@@ -26,7 +28,7 @@ S3_PRICING = {
 
 
 def generate_sample_s3_data():
-    """Generate sample S3 bucket data for demonstration."""
+    """Generate sample S3 data."""
     buckets = [
         {"name": "prod-app-assets", "class": "STANDARD", "size_gb": 500, "env": "Production", "purpose": "Application"},
         {"name": "prod-user-uploads", "class": "STANDARD", "size_gb": 2000, "env": "Production", "purpose": "User Data"},
@@ -47,313 +49,135 @@ def generate_sample_s3_data():
         pricing = S3_PRICING.get(bucket["class"], S3_PRICING["STANDARD"])
         monthly_cost = bucket["size_gb"] * pricing["storage"]
 
-        # Simulate access patterns
         if bucket["class"] in ["GLACIER_FLEXIBLE", "GLACIER_DEEP"]:
-            access_frequency = "Rare"
-            last_accessed_days = np.random.randint(30, 365)
+            access_frequency, last_accessed_days = "Rare", np.random.randint(30, 365)
         elif bucket["class"] in ["STANDARD_IA", "ONEZONE_IA"]:
-            access_frequency = "Infrequent"
-            last_accessed_days = np.random.randint(7, 60)
+            access_frequency, last_accessed_days = "Infrequent", np.random.randint(7, 60)
         else:
-            if "logs" in bucket["name"] or "old" in bucket["name"]:
-                access_frequency = "Infrequent"
-                last_accessed_days = np.random.randint(14, 90)
-            else:
-                access_frequency = "Frequent"
-                last_accessed_days = np.random.randint(0, 7)
-
-        # Objects count estimate
-        objects_count = int(bucket["size_gb"] * np.random.uniform(100, 10000))
+            access_frequency = "Infrequent" if "logs" in bucket["name"] or "old" in bucket["name"] else "Frequent"
+            last_accessed_days = np.random.randint(14, 90) if access_frequency == "Infrequent" else np.random.randint(0, 7)
 
         data.append({
-            "bucket_name": bucket["name"],
-            "storage_class": bucket["class"],
-            "size_gb": bucket["size_gb"],
-            "size_tb": bucket["size_gb"] / 1024,
-            "objects_count": objects_count,
-            "environment": bucket["env"],
-            "purpose": bucket["purpose"],
-            "access_frequency": access_frequency,
-            "last_accessed_days": last_accessed_days,
-            "has_lifecycle_policy": np.random.choice([True, False], p=[0.3, 0.7]),
+            "bucket_name": bucket["name"], "storage_class": bucket["class"], "size_gb": bucket["size_gb"],
+            "size_tb": bucket["size_gb"] / 1024, "objects_count": int(bucket["size_gb"] * np.random.uniform(100, 10000)),
+            "environment": bucket["env"], "purpose": bucket["purpose"], "access_frequency": access_frequency,
+            "last_accessed_days": last_accessed_days, "has_lifecycle_policy": np.random.choice([True, False], p=[0.3, 0.7]),
             "monthly_cost": monthly_cost,
         })
-
     return pd.DataFrame(data)
 
 
-# Load or generate data
 if "s3_data" not in st.session_state:
     st.session_state["s3_data"] = generate_sample_s3_data()
 
 df = st.session_state["s3_data"]
 
-# Summary metrics
-st.markdown("### 📊 Overview")
+section_header("Overview")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+st.markdown(metrics_row([
+    ("🪣", len(df), "Total Buckets"),
+    ("💵", f"${df['monthly_cost'].sum():,.0f}", "Monthly Spend", "orange"),
+    ("💾", f"{df['size_tb'].sum():,.1f} TB", "Total Storage"),
+    ("📦", f"{len(df[df['storage_class'] == 'STANDARD']) / len(df) * 100:.0f}%", "In Standard"),
+    ("⚠️", len(df[df["has_lifecycle_policy"] == False]), "No Lifecycle", "red"),
+]), unsafe_allow_html=True)
 
-with col1:
-    st.metric("Total Buckets", len(df))
+st.divider()
 
-with col2:
-    st.metric("Monthly Spend", f"${df['monthly_cost'].sum():,.0f}")
-
-with col3:
-    total_storage_tb = df["size_tb"].sum()
-    st.metric("Total Storage", f"{total_storage_tb:,.1f} TB")
-
-with col4:
-    standard_pct = len(df[df["storage_class"] == "STANDARD"]) / len(df) * 100
-    st.metric("In Standard Class", f"{standard_pct:.0f}%")
-
-with col5:
-    no_lifecycle = len(df[df["has_lifecycle_policy"] == False])
-    st.metric("No Lifecycle Policy", no_lifecycle)
-
-st.markdown("---")
-
-# Analysis tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📋 Bucket Inventory",
-    "💡 Storage Class Optimization",
-    "📈 Cost Analysis",
-    "🔄 Lifecycle Recommendations"
-])
+tab1, tab2, tab3, tab4 = st.tabs(["📋 Inventory", "💡 Storage Class Optimization", "📈 Cost Analysis", "🔄 Lifecycle Recommendations"])
 
 with tab1:
-    st.markdown("### Bucket Inventory")
+    section_header("Bucket Inventory")
 
-    # Filters
     col1, col2, col3 = st.columns(3)
     with col1:
-        class_filter = st.multiselect("Storage Class", df["storage_class"].unique(), default=list(df["storage_class"].unique()))
+        class_filter = st.multiselect("Storage Class", list(df["storage_class"].unique()), default=list(df["storage_class"].unique()))
     with col2:
-        env_filter = st.multiselect("Environment", df["environment"].unique(), default=list(df["environment"].unique()))
+        env_filter = st.multiselect("Environment", list(df["environment"].unique()), default=list(df["environment"].unique()))
     with col3:
-        purpose_filter = st.multiselect("Purpose", df["purpose"].unique(), default=list(df["purpose"].unique()))
+        purpose_filter = st.multiselect("Purpose", list(df["purpose"].unique()), default=list(df["purpose"].unique()))
 
-    filtered = df[
-        (df["storage_class"].isin(class_filter)) &
-        (df["environment"].isin(env_filter)) &
-        (df["purpose"].isin(purpose_filter))
-    ]
+    filtered = df[(df["storage_class"].isin(class_filter)) & (df["environment"].isin(env_filter)) & (df["purpose"].isin(purpose_filter))]
 
-    st.dataframe(
-        filtered[["bucket_name", "storage_class", "size_tb", "objects_count", "environment",
-                  "access_frequency", "has_lifecycle_policy", "monthly_cost"]],
-        column_config={
-            "size_tb": st.column_config.NumberColumn("Size (TB)", format="%.2f"),
-            "objects_count": st.column_config.NumberColumn("Objects", format="%d"),
-            "monthly_cost": st.column_config.NumberColumn("Monthly Cost", format="$%.2f"),
-            "has_lifecycle_policy": st.column_config.CheckboxColumn("Lifecycle Policy"),
-        },
-        use_container_width=True,
-        height=400
-    )
+    st.dataframe(filtered[["bucket_name", "storage_class", "size_tb", "objects_count", "environment", "access_frequency", "has_lifecycle_policy", "monthly_cost"]], column_config={
+        "size_tb": st.column_config.NumberColumn("Size (TB)", format="%.2f"),
+        "objects_count": st.column_config.NumberColumn("Objects", format="%d"),
+        "monthly_cost": st.column_config.NumberColumn("Monthly Cost", format="$%.2f"),
+        "has_lifecycle_policy": st.column_config.CheckboxColumn("Lifecycle"),
+    }, use_container_width=True, height=400)
 
 with tab2:
-    st.markdown("### Storage Class Optimization")
+    section_header("Storage Class Optimization")
 
     recommendations = []
-
     for _, row in df.iterrows():
-        # Check STANDARD buckets with infrequent access
         if row["storage_class"] == "STANDARD":
             if row["access_frequency"] == "Infrequent" or row["last_accessed_days"] > 30:
-                current_cost = row["monthly_cost"]
-                ia_cost = row["size_gb"] * S3_PRICING["STANDARD_IA"]["storage"]
-                savings = current_cost - ia_cost
-
-                recommendations.append({
-                    "bucket": row["bucket_name"],
-                    "current_class": row["storage_class"],
-                    "recommended_class": "STANDARD_IA",
-                    "reason": f"Infrequent access ({row['last_accessed_days']} days since last access)",
-                    "monthly_savings": savings,
-                    "risk": "Low"
-                })
-
-            elif row["access_frequency"] == "Rare" or row["last_accessed_days"] > 90:
-                current_cost = row["monthly_cost"]
-                glacier_cost = row["size_gb"] * S3_PRICING["GLACIER_IR"]["storage"]
-                savings = current_cost - glacier_cost
-
-                recommendations.append({
-                    "bucket": row["bucket_name"],
-                    "current_class": row["storage_class"],
-                    "recommended_class": "GLACIER_IR",
-                    "reason": f"Rare access ({row['last_accessed_days']} days since last access)",
-                    "monthly_savings": savings,
-                    "risk": "Medium"
-                })
-
-        # Check for Intelligent Tiering candidates
-        if row["storage_class"] == "STANDARD" and row["size_gb"] > 1000:
-            recommendations.append({
-                "bucket": row["bucket_name"],
-                "current_class": row["storage_class"],
-                "recommended_class": "INTELLIGENT_TIERING",
-                "reason": "Large bucket - automatic optimization",
-                "monthly_savings": row["monthly_cost"] * 0.15,  # Estimate
-                "risk": "Low"
-            })
+                savings = row["monthly_cost"] - row["size_gb"] * S3_PRICING["STANDARD_IA"]["storage"]
+                recommendations.append({"bucket": row["bucket_name"], "current_class": row["storage_class"], "recommended_class": "STANDARD_IA", "reason": f"Infrequent access ({row['last_accessed_days']} days)", "monthly_savings": savings, "risk": "Low"})
+            if row["size_gb"] > 1000:
+                recommendations.append({"bucket": row["bucket_name"], "current_class": row["storage_class"], "recommended_class": "INTELLIGENT_TIERING", "reason": "Large bucket - automatic optimization", "monthly_savings": row["monthly_cost"] * 0.15, "risk": "Low"})
 
     if recommendations:
         recs_df = pd.DataFrame(recommendations)
-        total_savings = recs_df["monthly_savings"].sum()
-
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.metric("Potential Savings", f"${total_savings:,.0f}/mo")
-
-        st.dataframe(
-            recs_df,
-            column_config={
-                "monthly_savings": st.column_config.NumberColumn("Monthly Savings", format="$%.2f"),
-            },
-            use_container_width=True
-        )
-
-        st.info("""
-        **S3 Storage Classes (from most to least expensive):**
-        1. **STANDARD** - Frequently accessed data
-        2. **INTELLIGENT_TIERING** - Automatic optimization for unknown patterns
-        3. **STANDARD_IA** - Infrequent access (30-day minimum)
-        4. **ONEZONE_IA** - Infrequent access, single AZ (lower durability)
-        5. **GLACIER_IR** - Archive with instant retrieval
-        6. **GLACIER_FLEXIBLE** - Archive (minutes to hours retrieval)
-        7. **GLACIER_DEEP** - Long-term archive (12+ hours retrieval)
-        """)
+        st.markdown(f"""
+        <div class="info-box success">
+            <strong>Potential Savings: ${recs_df['monthly_savings'].sum():,.0f}/month</strong>
+        </div>
+        """, unsafe_allow_html=True)
+        st.dataframe(recs_df, column_config={"monthly_savings": st.column_config.NumberColumn("Monthly Savings", format="$%.2f")}, use_container_width=True)
+        st.markdown("**Storage Classes (most to least expensive):** STANDARD → INTELLIGENT_TIERING → STANDARD_IA → GLACIER_IR → GLACIER_FLEXIBLE → GLACIER_DEEP")
     else:
-        st.success("All buckets appear to be using optimal storage classes!")
+        st.success("All buckets using optimal storage classes!")
 
 with tab3:
-    st.markdown("### Cost Analysis")
+    section_header("Cost Analysis")
 
     col1, col2 = st.columns(2)
-
     with col1:
         by_class = df.groupby("storage_class")["monthly_cost"].sum().sort_values(ascending=False)
-        fig = px.pie(values=by_class.values, names=by_class.index, title="Cost by Storage Class")
-        fig.update_layout(height=350)
+        fig = go.Figure(data=[go.Pie(labels=by_class.index, values=by_class.values, hole=0.5, marker_colors=['#FF9900', '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#64748b', '#ef4444'])])
+        fig.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#94a3b8'))
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         by_purpose = df.groupby("purpose")["monthly_cost"].sum().sort_values(ascending=False)
-        fig = px.bar(x=by_purpose.index, y=by_purpose.values, title="Cost by Purpose")
-        fig.update_layout(height=350)
+        fig = px.bar(x=by_purpose.index, y=by_purpose.values, color_discrete_sequence=['#FF9900'])
+        fig.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#94a3b8'), xaxis=dict(gridcolor='rgba(255,255,255,0.05)'), yaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Monthly Cost ($)"))
         st.plotly_chart(fig, use_container_width=True)
 
-    # Size distribution
-    st.markdown("#### Storage Distribution by Class")
-    by_class_size = df.groupby("storage_class")["size_tb"].sum().sort_values(ascending=False)
-    fig = px.bar(
-        x=by_class_size.index,
-        y=by_class_size.values,
-        title="Storage Size by Class (TB)",
-        color=by_class_size.index
-    )
-    fig.update_layout(height=400, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Top buckets by cost
-    st.markdown("#### Top 10 Buckets by Cost")
-    top_buckets = df.nlargest(10, "monthly_cost")[["bucket_name", "storage_class", "size_tb", "monthly_cost"]]
-    fig = px.bar(
-        top_buckets,
-        x="bucket_name",
-        y="monthly_cost",
-        color="storage_class",
-        title="Top 10 Buckets by Monthly Cost"
-    )
-    fig.update_layout(height=400, xaxis_tickangle=45)
+    chart_header("Top Buckets by Cost")
+    top_buckets = df.nlargest(10, "monthly_cost")
+    fig = px.bar(top_buckets, x="bucket_name", y="monthly_cost", color="storage_class", color_discrete_sequence=['#FF9900', '#10b981', '#3b82f6', '#f59e0b'])
+    fig.update_layout(height=400, xaxis_tickangle=45, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#94a3b8'), xaxis=dict(gridcolor='rgba(255,255,255,0.05)'), yaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Monthly Cost ($)"))
     st.plotly_chart(fig, use_container_width=True)
 
 with tab4:
-    st.markdown("### Lifecycle Policy Recommendations")
+    section_header("Lifecycle Policy Recommendations")
 
     no_lifecycle = df[df["has_lifecycle_policy"] == False].copy()
-
     if len(no_lifecycle) > 0:
-        st.warning(f"**{len(no_lifecycle)} buckets** have no lifecycle policy configured.")
+        st.markdown(f"""
+        <div class="info-box warning">
+            <strong>{len(no_lifecycle)} buckets</strong> have no lifecycle policy configured
+        </div>
+        """, unsafe_allow_html=True)
 
-        # Estimate potential savings
-        lifecycle_recommendations = []
-
+        lifecycle_recs = []
         for _, row in no_lifecycle.iterrows():
             if row["purpose"] == "Logs":
-                lifecycle_recommendations.append({
-                    "bucket": row["bucket_name"],
-                    "recommendation": "Transition to IA after 30 days, Glacier after 90 days, delete after 365 days",
-                    "estimated_savings": row["monthly_cost"] * 0.6,
-                })
+                lifecycle_recs.append({"bucket": row["bucket_name"], "recommendation": "IA after 30d, Glacier after 90d, delete after 365d", "estimated_savings": row["monthly_cost"] * 0.6})
             elif row["purpose"] == "Backups":
-                lifecycle_recommendations.append({
-                    "bucket": row["bucket_name"],
-                    "recommendation": "Transition to Glacier after 7 days, Deep Archive after 90 days",
-                    "estimated_savings": row["monthly_cost"] * 0.7,
-                })
-            elif row["purpose"] == "Analytics":
-                lifecycle_recommendations.append({
-                    "bucket": row["bucket_name"],
-                    "recommendation": "Use Intelligent Tiering or transition older partitions to IA",
-                    "estimated_savings": row["monthly_cost"] * 0.3,
-                })
+                lifecycle_recs.append({"bucket": row["bucket_name"], "recommendation": "Glacier after 7d, Deep Archive after 90d", "estimated_savings": row["monthly_cost"] * 0.7})
             else:
-                lifecycle_recommendations.append({
-                    "bucket": row["bucket_name"],
-                    "recommendation": "Review access patterns and implement appropriate lifecycle rules",
-                    "estimated_savings": row["monthly_cost"] * 0.2,
-                })
+                lifecycle_recs.append({"bucket": row["bucket_name"], "recommendation": "Review access patterns and implement lifecycle rules", "estimated_savings": row["monthly_cost"] * 0.2})
 
-        lifecycle_df = pd.DataFrame(lifecycle_recommendations)
-        total_lifecycle_savings = lifecycle_df["estimated_savings"].sum()
-
-        st.metric("Potential Lifecycle Savings", f"${total_lifecycle_savings:,.0f}/mo")
-
-        st.dataframe(
-            lifecycle_df,
-            column_config={
-                "estimated_savings": st.column_config.NumberColumn("Est. Monthly Savings", format="$%.2f"),
-            },
-            use_container_width=True
-        )
-
-        st.markdown("---")
-        st.markdown("#### Sample Lifecycle Policy (Terraform)")
-        st.code("""
-resource "aws_s3_bucket_lifecycle_configuration" "example" {
-  bucket = aws_s3_bucket.example.id
-
-  rule {
-    id     = "log-retention"
-    status = "Enabled"
-
-    transition {
-      days          = 30
-      storage_class = "STANDARD_IA"
-    }
-
-    transition {
-      days          = 90
-      storage_class = "GLACIER"
-    }
-
-    expiration {
-      days = 365
-    }
-  }
-}
-        """, language="hcl")
-
+        lifecycle_df = pd.DataFrame(lifecycle_recs)
+        st.markdown(f"""
+        <div class="info-box success">
+            <strong>Potential Lifecycle Savings: ${lifecycle_df['estimated_savings'].sum():,.0f}/month</strong>
+        </div>
+        """, unsafe_allow_html=True)
+        st.dataframe(lifecycle_df, column_config={"estimated_savings": st.column_config.NumberColumn("Est. Savings", format="$%.2f")}, use_container_width=True)
     else:
-        st.success("All buckets have lifecycle policies configured!")
-
-    st.info("""
-    **Lifecycle Policy Best Practices:**
-    - **Logs**: Delete after retention period, archive if needed for compliance
-    - **Backups**: Transition to Glacier quickly, Deep Archive for long-term
-    - **User Uploads**: Use Intelligent Tiering for unpredictable access
-    - **Analytics**: Partition by date, transition older partitions to IA/Glacier
-    """)
+        st.success("All buckets have lifecycle policies!")

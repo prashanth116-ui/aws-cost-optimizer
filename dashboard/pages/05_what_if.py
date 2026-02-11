@@ -4,33 +4,47 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from styles import inject_styles, page_header, section_header, chart_header, metrics_row
 
 st.set_page_config(page_title="What-If Analysis", page_icon="🔮", layout="wide")
+inject_styles()
 
-st.title("What-If Scenario Analysis")
-st.caption("Model different optimization scenarios and compare outcomes")
+page_header("🔮 What-If Scenario Analysis", "Model different optimization scenarios and compare outcomes")
 
 
 def load_data():
     """Load data from session state."""
+    if "sample_df" in st.session_state:
+        return st.session_state["sample_df"]
     if "report_file" in st.session_state:
-        return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        try:
+            return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        except:
+            return None
     return None
 
 
 df = load_data()
 
 if df is None:
-    st.info("Please upload a report from the main page to use What-If analysis.")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>No data loaded.</strong> Please go to the Home page and load sample data or upload a report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # Scenario Builder
-st.header("Scenario Builder")
+section_header("Scenario Builder")
 
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.markdown("### Select Servers to Optimize")
+    chart_header("Select Servers to Optimize")
 
     # Filter options
     filter_col1, filter_col2, filter_col3 = st.columns(3)
@@ -38,16 +52,16 @@ with col1:
     with filter_col1:
         class_filter = st.multiselect(
             "Classification",
-            options=df["classification"].unique() if "classification" in df.columns else [],
-            default=["oversized"] if "oversized" in df["classification"].values else []
+            options=list(df["classification"].unique()) if "classification" in df.columns else [],
+            default=["oversized"] if "classification" in df.columns and "oversized" in df["classification"].values else []
         )
 
     with filter_col2:
         if "risk_level" in df.columns:
             risk_filter = st.multiselect(
                 "Risk Level",
-                options=df["risk_level"].dropna().unique(),
-                default=["low"]
+                options=list(df["risk_level"].dropna().unique()),
+                default=["low"] if "low" in df["risk_level"].values else []
             )
         else:
             risk_filter = []
@@ -84,7 +98,7 @@ with col1:
             filtered_df = filtered_df[filtered_df["hostname"].isin(selected_servers)]
 
 with col2:
-    st.markdown("### Scenario Summary")
+    chart_header("Scenario Summary")
 
     if len(filtered_df) > 0:
         current_cost = filtered_df["current_monthly"].sum() if "current_monthly" in filtered_df.columns else 0
@@ -99,17 +113,21 @@ with col2:
         st.progress(min(savings_pct / 100, 1.0))
         st.caption(f"{savings_pct:.1f}% reduction")
     else:
-        st.warning("No servers selected")
+        st.markdown("""
+        <div class="info-box warning">
+            No servers selected
+        </div>
+        """, unsafe_allow_html=True)
 
 st.divider()
 
 # Scenario Comparison
-st.header("Scenario Comparison")
+section_header("Scenario Comparison")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### Implementation Timeline")
+    chart_header("Implementation Timeline")
 
     implementation_pct = st.slider(
         "What percentage of recommendations will you implement?",
@@ -127,7 +145,7 @@ with col1:
     )
 
 with col2:
-    st.markdown("### Projected Savings")
+    chart_header("Projected Savings")
 
     if len(filtered_df) > 0 and "monthly_savings" in filtered_df.columns:
         total_potential = filtered_df[filtered_df["monthly_savings"] > 0]["monthly_savings"].sum()
@@ -140,10 +158,8 @@ with col2:
         cumulative_savings = []
         for m in months:
             if m <= months_to_implement:
-                # Ramping up
                 implemented = monthly_implementation * m
             else:
-                # Fully implemented
                 implemented = actual_savings
             cumulative_savings.append(implemented * (m - (m - min(m, months_to_implement)) / 2))
 
@@ -156,8 +172,8 @@ with col2:
             mode='lines+markers',
             name='Projected Savings',
             fill='tozeroy',
-            fillcolor='rgba(40, 167, 69, 0.3)',
-            line=dict(color='#28a745', width=3)
+            fillcolor='rgba(16, 185, 129, 0.2)',
+            line=dict(color='#10b981', width=3)
         ))
 
         # Maximum potential
@@ -167,44 +183,48 @@ with col2:
             y=max_potential,
             mode='lines',
             name='Maximum Potential (100%)',
-            line=dict(color='#6c757d', dash='dash')
+            line=dict(color='#64748b', dash='dash')
         ))
 
         fig.update_layout(
             height=350,
             yaxis_title="Cumulative Savings ($)",
             yaxis_tickformat="$,.0f",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02)
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#94a3b8'),
+            xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+            yaxis=dict(gridcolor='rgba(255,255,255,0.05)')
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
         # Summary metrics
         year_end_savings = cumulative_savings[-1]
-        st.success(f"**12-Month Savings Projection: ${year_end_savings:,.0f}**")
+        st.markdown(f"""
+        <div class="info-box success">
+            <strong>12-Month Savings Projection: ${year_end_savings:,.0f}</strong>
+        </div>
+        """, unsafe_allow_html=True)
 
 st.divider()
 
 # Detailed Breakdown
-st.header("Detailed Breakdown")
+section_header("Detailed Breakdown")
 
 if len(filtered_df) > 0:
-    # Group by classification or GSI
+    available_groups = ["classification", "instance_type"]
+    if "Environment" in filtered_df.columns:
+        available_groups.append("Environment")
+
     group_by = st.selectbox(
         "Group by:",
-        options=["classification", "instance_type", "GSI", "Environment"],
+        options=available_groups,
         index=0
     )
 
-    tag_cols = {
-        "GSI": "GSI",
-        "Environment": "Environment",
-    }
-
-    if group_by in tag_cols and group_by not in filtered_df.columns:
-        # Check for tag in tags column
-        st.warning(f"{group_by} column not found")
-    elif group_by in filtered_df.columns:
+    if group_by in filtered_df.columns:
         grouped = filtered_df.groupby(group_by).agg({
             "current_monthly": "sum",
             "monthly_savings": lambda x: x[x > 0].sum(),
@@ -224,9 +244,10 @@ if len(filtered_df) > 0:
             }
         )
 
-# Export scenario
 st.divider()
-st.header("Export Scenario")
+
+# Export scenario
+section_header("Export Scenario")
 
 col1, col2 = st.columns(2)
 
@@ -234,7 +255,7 @@ with col1:
     if len(filtered_df) > 0:
         csv = filtered_df.to_csv(index=False)
         st.download_button(
-            label="Download Selected Servers (CSV)",
+            label="📥 Download Selected Servers (CSV)",
             data=csv,
             file_name="optimization_scenario.csv",
             mime="text/csv"

@@ -5,13 +5,16 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from styles import inject_styles, page_header, section_header, chart_header, metrics_row
 
 st.set_page_config(page_title="RDS Analysis", page_icon="🗄️", layout="wide")
+inject_styles()
 
-st.markdown("""
-    <h1 style="color: #3B48CC;">🗄️ RDS Database Analysis</h1>
-    <p style="color: #666;">Optimize database instances, identify idle DBs, and recommend Reserved Instance coverage</p>
-""", unsafe_allow_html=True)
+page_header("🗄️ RDS Database Analysis", "Optimize database instances, identify idle DBs, and recommend Reserved Instance coverage")
 
 # RDS Instance Pricing (approximate hourly rates)
 RDS_PRICING = {
@@ -29,7 +32,6 @@ RDS_PRICING = {
     "db.r5.4xlarge": {"vcpu": 16, "memory_gb": 128, "hourly": 1.92},
 }
 
-# Graviton equivalents for RDS
 RDS_GRAVITON = {
     "db.m5.large": "db.m6g.large",
     "db.m5.xlarge": "db.m6g.xlarge",
@@ -59,9 +61,8 @@ def generate_sample_rds_data():
     for db in databases:
         specs = RDS_PRICING.get(db["instance_type"], {"vcpu": 2, "memory_gb": 8, "hourly": 0.2})
         monthly_cost = specs["hourly"] * 730 * (2 if db["multi_az"] else 1)
-        storage_cost = db["storage_gb"] * 0.115  # gp2 pricing
+        storage_cost = db["storage_gb"] * 0.115
 
-        # Random utilization
         if db["env"] == "Development":
             cpu_avg = np.random.uniform(5, 20)
             connections_avg = np.random.uniform(1, 10)
@@ -94,54 +95,35 @@ def generate_sample_rds_data():
     return pd.DataFrame(data)
 
 
-# Load or generate data
 if "rds_data" not in st.session_state:
     st.session_state["rds_data"] = generate_sample_rds_data()
 
 df = st.session_state["rds_data"]
 
 # Summary metrics
-st.markdown("### 📊 Overview")
+section_header("Overview")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+st.markdown(metrics_row([
+    ("🗄️", len(df), "Total Databases"),
+    ("💵", f"${df['monthly_total'].sum():,.0f}", "Monthly Spend", "orange"),
+    ("🔄", len(df[df["multi_az"] == True]), "Multi-AZ Enabled"),
+    ("💾", f"{df['storage_gb'].sum():,.0f} GB", "Total Storage"),
+    ("📊", f"{df['cpu_avg'].mean():.1f}%", "Avg CPU"),
+]), unsafe_allow_html=True)
 
-with col1:
-    st.metric("Total Databases", len(df))
-
-with col2:
-    st.metric("Monthly Spend", f"${df['monthly_total'].sum():,.0f}")
-
-with col3:
-    multi_az = len(df[df["multi_az"] == True])
-    st.metric("Multi-AZ Enabled", multi_az)
-
-with col4:
-    total_storage = df["storage_gb"].sum()
-    st.metric("Total Storage", f"{total_storage:,.0f} GB")
-
-with col5:
-    avg_cpu = df["cpu_avg"].mean()
-    st.metric("Avg CPU Usage", f"{avg_cpu:.1f}%")
-
-st.markdown("---")
+st.divider()
 
 # Analysis tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📋 Database Inventory",
-    "💡 Optimization Recommendations",
-    "💰 Cost Analysis",
-    "🚀 Graviton Migration"
-])
+tab1, tab2, tab3, tab4 = st.tabs(["📋 Inventory", "💡 Recommendations", "💰 Cost Analysis", "🚀 Graviton"])
 
 with tab1:
-    st.markdown("### Database Inventory")
+    section_header("Database Inventory")
 
-    # Filters
     col1, col2, col3 = st.columns(3)
     with col1:
-        engine_filter = st.multiselect("Engine", df["engine"].unique(), default=list(df["engine"].unique()))
+        engine_filter = st.multiselect("Engine", list(df["engine"].unique()), default=list(df["engine"].unique()))
     with col2:
-        env_filter = st.multiselect("Environment", df["environment"].unique(), default=list(df["environment"].unique()))
+        env_filter = st.multiselect("Environment", list(df["environment"].unique()), default=list(df["environment"].unique()))
     with col3:
         min_cost = st.slider("Min Monthly Cost ($)", 0, int(df["monthly_total"].max()), 0)
 
@@ -152,10 +134,7 @@ with tab1:
     ]
 
     st.dataframe(
-        filtered[[
-            "db_name", "engine", "instance_type", "multi_az",
-            "cpu_avg", "connections_avg", "monthly_total", "environment"
-        ]],
+        filtered[["db_name", "engine", "instance_type", "multi_az", "cpu_avg", "connections_avg", "monthly_total", "environment"]],
         column_config={
             "cpu_avg": st.column_config.NumberColumn("CPU Avg %", format="%.1f"),
             "connections_avg": st.column_config.NumberColumn("Connections", format="%.0f"),
@@ -167,123 +146,100 @@ with tab1:
     )
 
 with tab2:
-    st.markdown("### Optimization Recommendations")
+    section_header("Optimization Recommendations")
 
     recommendations = []
-
     for _, row in df.iterrows():
-        # Check for idle databases
         if row["cpu_avg"] < 5 and row["connections_avg"] < 5:
             recommendations.append({
-                "database": row["db_name"],
-                "issue": "Potentially Idle",
-                "recommendation": "Review usage - consider shutting down or downsizing",
-                "savings": row["monthly_total"] * 0.9,
-                "risk": "Medium"
+                "database": row["db_name"], "issue": "Potentially Idle",
+                "recommendation": "Review usage - consider shutting down",
+                "savings": row["monthly_total"] * 0.9, "risk": "Medium"
             })
-        # Check for oversized
         elif row["cpu_avg"] < 20 and row["cpu_p95"] < 40:
             recommendations.append({
-                "database": row["db_name"],
-                "issue": "Oversized",
+                "database": row["db_name"], "issue": "Oversized",
                 "recommendation": f"Downsize from {row['instance_type']}",
-                "savings": row["monthly_compute"] * 0.4,
-                "risk": "Low"
+                "savings": row["monthly_compute"] * 0.4, "risk": "Low"
             })
-        # Check for Multi-AZ in non-prod
         if row["multi_az"] and row["environment"] in ["Development", "Test", "Staging"]:
             recommendations.append({
-                "database": row["db_name"],
-                "issue": "Multi-AZ in non-prod",
+                "database": row["db_name"], "issue": "Multi-AZ in non-prod",
                 "recommendation": "Disable Multi-AZ for non-production",
-                "savings": row["monthly_compute"] * 0.5,
-                "risk": "Low"
+                "savings": row["monthly_compute"] * 0.5, "risk": "Low"
             })
 
     if recommendations:
         recs_df = pd.DataFrame(recommendations)
         total_savings = recs_df["savings"].sum()
 
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.metric("Potential Savings", f"${total_savings:,.0f}/mo")
+        st.markdown(f"""
+        <div class="info-box success">
+            <strong>Potential Savings: ${total_savings:,.0f}/month</strong>
+        </div>
+        """, unsafe_allow_html=True)
 
-        st.dataframe(
-            recs_df,
-            column_config={
-                "savings": st.column_config.NumberColumn("Monthly Savings", format="$%.2f"),
-            },
-            use_container_width=True
-        )
+        st.dataframe(recs_df, column_config={"savings": st.column_config.NumberColumn("Monthly Savings", format="$%.2f")}, use_container_width=True)
     else:
         st.success("All databases appear optimized!")
 
 with tab3:
-    st.markdown("### Cost Analysis")
+    section_header("Cost Analysis")
 
     col1, col2 = st.columns(2)
-
     with col1:
         by_env = df.groupby("environment")["monthly_total"].sum().sort_values(ascending=False)
-        fig = px.pie(values=by_env.values, names=by_env.index, title="Cost by Environment")
-        fig.update_layout(height=350)
+        fig = go.Figure(data=[go.Pie(labels=by_env.index, values=by_env.values, hole=0.5, marker_colors=['#FF9900', '#10b981', '#3b82f6', '#f59e0b'])])
+        fig.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#94a3b8'), showlegend=True)
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         by_engine = df.groupby("engine")["monthly_total"].sum().sort_values(ascending=False)
-        fig = px.bar(x=by_engine.index, y=by_engine.values, title="Cost by Database Engine")
-        fig.update_layout(height=350)
+        fig = px.bar(x=by_engine.index, y=by_engine.values, color_discrete_sequence=['#FF9900'])
+        fig.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#94a3b8'), xaxis=dict(gridcolor='rgba(255,255,255,0.05)'), yaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Monthly Cost ($)"))
         st.plotly_chart(fig, use_container_width=True)
 
-    # Cost breakdown
-    st.markdown("#### Compute vs Storage Cost")
+    chart_header("Compute vs Storage Cost")
     fig = go.Figure(data=[
         go.Bar(name='Compute', x=df["db_name"], y=df["monthly_compute"], marker_color='#FF9900'),
-        go.Bar(name='Storage', x=df["db_name"], y=df["monthly_storage"], marker_color='#232F3E')
+        go.Bar(name='Storage', x=df["db_name"], y=df["monthly_storage"], marker_color='#10b981')
     ])
-    fig.update_layout(barmode='stack', height=400, xaxis_tickangle=45)
+    fig.update_layout(barmode='stack', height=400, xaxis_tickangle=45, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#94a3b8'), xaxis=dict(gridcolor='rgba(255,255,255,0.05)'), yaxis=dict(gridcolor='rgba(255,255,255,0.05)'))
     st.plotly_chart(fig, use_container_width=True)
 
 with tab4:
-    st.markdown("### Graviton Migration Opportunities")
+    section_header("Graviton Migration Opportunities")
 
     graviton_candidates = []
     for _, row in df.iterrows():
         if row["instance_type"] in RDS_GRAVITON:
-            current_cost = row["monthly_compute"]
-            graviton_type = RDS_GRAVITON[row["instance_type"]]
-            savings = current_cost * 0.20  # ~20% savings
-
             graviton_candidates.append({
-                "database": row["db_name"],
-                "current_type": row["instance_type"],
-                "graviton_type": graviton_type,
-                "current_cost": current_cost,
-                "estimated_savings": savings,
-                "engine": row["engine"]
+                "database": row["db_name"], "current_type": row["instance_type"],
+                "graviton_type": RDS_GRAVITON[row["instance_type"]],
+                "current_cost": row["monthly_compute"],
+                "estimated_savings": row["monthly_compute"] * 0.20, "engine": row["engine"]
             })
 
     if graviton_candidates:
         grav_df = pd.DataFrame(graviton_candidates)
         total_graviton_savings = grav_df["estimated_savings"].sum()
 
-        st.success(f"💰 Potential Graviton Savings: **${total_graviton_savings:,.0f}/month**")
+        st.markdown(f"""
+        <div class="info-box success">
+            <strong>Potential Graviton Savings: ${total_graviton_savings:,.0f}/month</strong>
+        </div>
+        """, unsafe_allow_html=True)
 
-        st.dataframe(
-            grav_df,
-            column_config={
-                "current_cost": st.column_config.NumberColumn("Current Cost", format="$%.2f"),
-                "estimated_savings": st.column_config.NumberColumn("Est. Savings", format="$%.2f"),
-            },
-            use_container_width=True
-        )
+        st.dataframe(grav_df, column_config={
+            "current_cost": st.column_config.NumberColumn("Current Cost", format="$%.2f"),
+            "estimated_savings": st.column_config.NumberColumn("Est. Savings", format="$%.2f"),
+        }, use_container_width=True)
 
-        st.info("""
+        st.markdown("""
         **Graviton Benefits for RDS:**
         - Up to 20% cost savings
         - Up to 35% better price-performance
         - Supported by MySQL, PostgreSQL, MariaDB
-        - Same APIs and tools
         """)
     else:
-        st.info("No Graviton migration candidates found - databases may already be on Graviton or incompatible engine.")
+        st.info("No Graviton migration candidates found.")

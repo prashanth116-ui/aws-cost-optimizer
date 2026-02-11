@@ -4,16 +4,20 @@ import streamlit as st
 import json
 from pathlib import Path
 from datetime import datetime
+import sys
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from styles import inject_styles, page_header, section_header, chart_header
 
 st.set_page_config(page_title="Settings", page_icon="⚙️", layout="wide")
+inject_styles()
 
-st.title("Settings")
-st.caption("Configure dashboard preferences, saved filters, and notifications")
+page_header("⚙️ Settings", "Configure dashboard preferences, saved filters, and notifications")
 
 # Initialize session state for settings
 if "settings" not in st.session_state:
     st.session_state["settings"] = {
-        "theme": "light",
+        "theme": "dark",
         "default_view": "Server Analysis",
         "auto_refresh": False,
         "refresh_interval": 5,
@@ -33,31 +37,17 @@ if "settings" not in st.session_state:
 settings = st.session_state["settings"]
 
 # Appearance
-st.header("Appearance")
+section_header("Appearance")
 
 col1, col2 = st.columns(2)
 
 with col1:
     theme = st.selectbox(
         "Theme",
-        options=["Light", "Dark", "Auto (System)"],
-        index=["Light", "Dark", "Auto (System)"].index(settings["theme"].title()) if settings["theme"].title() in ["Light", "Dark", "Auto (System)"] else 0
+        options=["Dark", "Light", "Auto (System)"],
+        index=0
     )
     settings["theme"] = theme.lower().replace(" (system)", "")
-
-    if theme == "Dark":
-        st.markdown("""
-        <style>
-        .stApp {
-            background-color: #1e1e1e;
-            color: #ffffff;
-        }
-        .stMarkdown {
-            color: #ffffff;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        st.info("Dark mode applies custom styling. Full dark mode support depends on Streamlit theme settings.")
 
 with col2:
     default_view = st.selectbox(
@@ -70,13 +60,12 @@ with col2:
 st.divider()
 
 # Saved Filters
-st.header("Saved Filters")
+section_header("Saved Filters")
 
 st.markdown("Save frequently used filter combinations for quick access.")
 
-# Current filters display
 if settings["saved_filters"]:
-    st.subheader("Your Saved Filters")
+    chart_header("Your Saved Filters")
 
     for i, filter_config in enumerate(settings["saved_filters"]):
         col1, col2, col3 = st.columns([3, 2, 1])
@@ -95,7 +84,7 @@ if settings["saved_filters"]:
     st.divider()
 
 # Create new filter
-st.subheader("Create New Saved Filter")
+chart_header("Create New Saved Filter")
 
 with st.form("new_filter_form"):
     filter_name = st.text_input("Filter Name", placeholder="e.g., Production Oversized")
@@ -149,14 +138,14 @@ with st.form("new_filter_form"):
 st.divider()
 
 # Notifications
-st.header("Notifications")
+section_header("Notifications")
 
 st.markdown("Configure alerts for significant savings opportunities.")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("Slack Integration")
+    chart_header("Slack Integration")
 
     slack_webhook = st.text_input(
         "Slack Webhook URL",
@@ -183,7 +172,7 @@ with col1:
                 st.error(f"Error: {e}")
 
 with col2:
-    st.subheader("Alert Thresholds")
+    chart_header("Alert Thresholds")
 
     threshold_savings = st.number_input(
         "Alert when monthly savings exceed ($)",
@@ -203,7 +192,7 @@ with col2:
 st.divider()
 
 # Export Preferences
-st.header("Export Preferences")
+section_header("Export Preferences")
 
 col1, col2 = st.columns(2)
 
@@ -230,15 +219,15 @@ with col2:
 
 st.divider()
 
-# Classification Thresholds (moved from main app for centralized settings)
-st.header("Classification Thresholds")
+# Classification Thresholds
+section_header("Classification Thresholds")
 
 st.markdown("Adjust the CPU and Memory thresholds used for server classification.")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("CPU Thresholds (%)")
+    chart_header("CPU Thresholds (%)")
 
     if "thresholds" not in st.session_state:
         st.session_state["thresholds"] = {
@@ -261,7 +250,7 @@ with col1:
     )
 
 with col2:
-    st.subheader("Memory Thresholds (%)")
+    chart_header("Memory Thresholds (%)")
 
     mem_oversized = st.slider(
         "Oversized if P95 below:",
@@ -287,12 +276,12 @@ if st.button("Save Threshold Settings"):
 st.divider()
 
 # Data Management
-st.header("Data Management")
+section_header("Data Management")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("Clear Session Data")
+    chart_header("Clear Session Data")
 
     if st.button("Clear Uploaded Report"):
         if "report_file" in st.session_state:
@@ -302,6 +291,14 @@ with col1:
         else:
             st.info("No report loaded.")
 
+    if st.button("Clear Sample Data"):
+        if "sample_df" in st.session_state:
+            del st.session_state["sample_df"]
+            st.success("Sample data cleared!")
+            st.rerun()
+        else:
+            st.info("No sample data loaded.")
+
     if st.button("Clear Implementation Status"):
         if "implementation_status" in st.session_state:
             st.session_state["implementation_status"] = {}
@@ -310,17 +307,15 @@ with col1:
             st.info("No status data to clear.")
 
 with col2:
-    st.subheader("Export Settings")
+    chart_header("Export/Import Settings")
 
     settings_json = json.dumps(settings, indent=2)
     st.download_button(
-        label="Export Settings (JSON)",
+        label="📥 Export Settings (JSON)",
         data=settings_json,
         file_name="cost_optimizer_settings.json",
         mime="application/json"
     )
-
-    st.subheader("Import Settings")
 
     uploaded_settings = st.file_uploader(
         "Upload settings file",
@@ -339,7 +334,7 @@ with col2:
 st.divider()
 
 # About
-st.header("About")
+section_header("About")
 
 st.markdown("""
 **AWS Cost Optimizer Dashboard** v1.1
@@ -353,7 +348,8 @@ Features:
 - Terraform/CLI code generation
 - Savings Plans comparison
 - Drill-down analysis by GSI/Environment
-- PDF report export
+- Multi-service analysis (RDS, EBS, Lambda, ElastiCache, S3)
+- Cost anomaly detection
 
 Built with Streamlit, Plotly, and Python.
 """)

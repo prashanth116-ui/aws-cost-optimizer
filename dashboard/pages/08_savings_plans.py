@@ -4,11 +4,16 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from styles import inject_styles, page_header, section_header, chart_header, metrics_row
 
 st.set_page_config(page_title="Savings Plans", page_icon="💳", layout="wide")
+inject_styles()
 
-st.title("Savings Plans & Reserved Instance Analysis")
-st.caption("Compare On-Demand, Savings Plans, and Reserved Instance pricing")
+page_header("💳 Savings Plans & Reserved Instances", "Compare On-Demand, Savings Plans, and Reserved Instance pricing")
 
 # Discount rates (approximate)
 PRICING_OPTIONS = {
@@ -26,41 +31,49 @@ PRICING_OPTIONS = {
 
 def load_data():
     """Load data from session state."""
+    if "sample_df" in st.session_state:
+        return st.session_state["sample_df"]
     if "report_file" in st.session_state:
-        return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        try:
+            return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        except:
+            return None
     return None
 
 
 df = load_data()
 
 if df is None:
-    st.info("Please upload a report from the main page to analyze savings options.")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>No data loaded.</strong> Please go to the Home page and load sample data or upload a report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # Current spend
 if "current_monthly" not in df.columns:
-    st.warning("Cost data not available")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>Cost data not available</strong> in this report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 total_on_demand = df["current_monthly"].sum()
 
-st.header("Current Spend Overview")
+section_header("Current Spend Overview")
 
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric("Total Monthly (On-Demand)", f"${total_on_demand:,.0f}")
-
-with col2:
-    st.metric("Total Yearly (On-Demand)", f"${total_on_demand * 12:,.0f}")
-
-with col3:
-    st.metric("Servers Analyzed", len(df))
+st.markdown(metrics_row([
+    ("💵", f"${total_on_demand:,.0f}", "Monthly (On-Demand)", "orange"),
+    ("📅", f"${total_on_demand * 12:,.0f}", "Yearly (On-Demand)", "orange"),
+    ("🖥️", len(df), "Servers Analyzed"),
+]), unsafe_allow_html=True)
 
 st.divider()
 
 # Pricing comparison
-st.header("Pricing Model Comparison")
+section_header("Pricing Model Comparison")
 
 comparison_data = []
 for option, details in PRICING_OPTIONS.items():
@@ -83,7 +96,6 @@ for option, details in PRICING_OPTIONS.items():
 
 comparison_df = pd.DataFrame(comparison_data)
 
-# Display table
 st.dataframe(
     comparison_df,
     use_container_width=True,
@@ -96,8 +108,7 @@ st.dataframe(
     hide_index=True
 )
 
-# Visualization
-st.subheader("Cost Comparison Chart")
+chart_header("Cost Comparison Chart")
 
 fig = go.Figure()
 
@@ -105,21 +116,27 @@ fig.add_trace(go.Bar(
     name="Monthly Cost",
     x=comparison_df["Pricing Option"],
     y=comparison_df["Monthly Cost"],
-    marker_color=["#dc3545" if "On-Demand" in x else "#28a745" for x in comparison_df["Pricing Option"]]
+    marker_color=["#ef4444" if "On-Demand" in x else "#10b981" for x in comparison_df["Pricing Option"]]
 ))
 
 fig.add_hline(
     y=total_on_demand,
     line_dash="dash",
-    line_color="red",
-    annotation_text="On-Demand Baseline"
+    line_color="#ef4444",
+    annotation_text="On-Demand Baseline",
+    annotation_font_color="#94a3b8"
 )
 
 fig.update_layout(
     height=400,
     xaxis_tickangle=45,
     yaxis_title="Monthly Cost ($)",
-    yaxis_tickformat="$,.0f"
+    yaxis_tickformat="$,.0f",
+    paper_bgcolor='rgba(0,0,0,0)',
+    plot_bgcolor='rgba(0,0,0,0)',
+    font=dict(color='#94a3b8'),
+    xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+    yaxis=dict(gridcolor='rgba(255,255,255,0.05)')
 )
 
 st.plotly_chart(fig, use_container_width=True)
@@ -127,12 +144,12 @@ st.plotly_chart(fig, use_container_width=True)
 st.divider()
 
 # Recommendation Engine
-st.header("Recommendation")
+section_header("Recommendation")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### Your Workload Profile")
+    chart_header("Your Workload Profile")
 
     workload_stability = st.select_slider(
         "Workload Stability",
@@ -153,7 +170,7 @@ with col1:
     )
 
 with col2:
-    st.markdown("### Our Recommendation")
+    chart_header("Our Recommendation")
 
     # Simple recommendation logic
     if workload_stability in ["Highly Variable", "Somewhat Variable"]:
@@ -180,8 +197,12 @@ with col2:
     rec_monthly = total_on_demand * (1 - rec_details["discount"] / 100)
     rec_savings = total_on_demand - rec_monthly
 
-    st.success(f"**Recommended: {recommended}**")
-    st.markdown(reason)
+    st.markdown(f"""
+    <div class="info-box success">
+        <strong>Recommended: {recommended}</strong><br>
+        {reason}
+    </div>
+    """, unsafe_allow_html=True)
 
     st.metric("Projected Monthly Cost", f"${rec_monthly:,.0f}")
     st.metric("Monthly Savings vs On-Demand", f"${rec_savings:,.0f}")
@@ -190,21 +211,16 @@ with col2:
 st.divider()
 
 # Break-even analysis
-st.header("Break-Even Analysis")
+section_header("Break-Even Analysis")
 
-st.markdown("""
-When does the upfront payment pay off? This analysis shows when Reserved Instances or
-Savings Plans with upfront payments become more economical than On-Demand.
-""")
+st.markdown("When does the upfront payment pay off?")
 
 # Calculate break-even for 1yr All Upfront Reserved
 reserved_discount = PRICING_OPTIONS["Reserved (1yr, All Upfront)"]["discount"]
 reserved_monthly = total_on_demand * (1 - reserved_discount / 100)
 monthly_savings = total_on_demand - reserved_monthly
 
-# Assuming upfront is roughly equal to 12 months of the discounted rate
-upfront_cost = reserved_monthly * 12 * 0.9  # Approximate
-
+upfront_cost = reserved_monthly * 12 * 0.9
 break_even_months = upfront_cost / monthly_savings if monthly_savings > 0 else 12
 
 col1, col2 = st.columns(2)
@@ -222,34 +238,38 @@ with col1:
     fig.add_trace(go.Scatter(
         x=months, y=on_demand_cumulative,
         name="On-Demand",
-        line=dict(color="#dc3545", width=2)
+        line=dict(color="#ef4444", width=2)
     ))
 
     fig.add_trace(go.Scatter(
         x=months, y=reserved_cumulative,
         name="Reserved (1yr, All Upfront)",
-        line=dict(color="#28a745", width=2)
+        line=dict(color="#10b981", width=2)
     ))
 
     fig.add_trace(go.Scatter(
         x=months, y=savings_plan_cumulative,
         name="Savings Plan (1yr)",
-        line=dict(color="#007bff", width=2)
+        line=dict(color="#3b82f6", width=2)
     ))
 
     fig.update_layout(
-        title="Cumulative Cost Over Time",
         xaxis_title="Months",
         yaxis_title="Cumulative Cost ($)",
         yaxis_tickformat="$,.0f",
         height=400,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#94a3b8'),
+        xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+        yaxis=dict(gridcolor='rgba(255,255,255,0.05)')
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    st.markdown("### Key Insights")
+    chart_header("Key Insights")
 
     st.markdown(f"""
     - **Break-even point**: ~{break_even_months:.0f} months for Reserved with upfront
@@ -267,7 +287,7 @@ with col2:
 st.divider()
 
 # Coverage calculator
-st.header("Coverage Calculator")
+section_header("Coverage Calculator")
 
 st.markdown("How much of your workload should be covered by commitments?")
 
@@ -293,15 +313,10 @@ committed_after_discount = committed_spend * (1 - commitment_discount / 100)
 
 total_blended = committed_after_discount + on_demand_spend
 blended_savings = total_on_demand - total_blended
+effective_discount = (blended_savings / total_on_demand * 100) if total_on_demand > 0 else 0
 
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric("Blended Monthly Cost", f"${total_blended:,.0f}")
-
-with col2:
-    st.metric("Monthly Savings", f"${blended_savings:,.0f}")
-
-with col3:
-    effective_discount = (blended_savings / total_on_demand * 100) if total_on_demand > 0 else 0
-    st.metric("Effective Discount", f"{effective_discount:.1f}%")
+st.markdown(metrics_row([
+    ("💵", f"${total_blended:,.0f}", "Blended Monthly", "green"),
+    ("💰", f"${blended_savings:,.0f}", "Monthly Savings", "green"),
+    ("📉", f"{effective_discount:.1f}%", "Effective Discount", "green"),
+]), unsafe_allow_html=True)

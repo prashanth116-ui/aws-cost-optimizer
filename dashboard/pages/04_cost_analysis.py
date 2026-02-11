@@ -4,74 +4,90 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from styles import inject_styles, page_header, section_header, chart_header, metrics_row
 
 st.set_page_config(page_title="Cost Analysis", page_icon="💰", layout="wide")
+inject_styles()
 
-st.title("Cost Analysis")
+page_header("💰 Cost Analysis", "Analyze current spend and potential savings")
 
 
 def load_data():
     """Load data from session state."""
+    if "sample_df" in st.session_state:
+        return st.session_state["sample_df"]
     if "report_file" in st.session_state:
-        return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        try:
+            return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        except:
+            return None
     return None
 
 
 df = load_data()
 
 if df is None:
-    st.info("Please upload a report from the main page to view cost analysis.")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>No data loaded.</strong> Please go to the Home page and load sample data or upload a report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 if "current_monthly" not in df.columns:
-    st.warning("Cost data not available in this report.")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>Cost data not available</strong> in this report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # Summary metrics
-st.header("Cost Overview")
+section_header("Cost Overview")
 
 total_current = df["current_monthly"].sum()
 total_savings = df[df["monthly_savings"] > 0]["monthly_savings"].sum() if "monthly_savings" in df.columns else 0
 total_optimized = total_current - total_savings
+savings_pct = (total_savings / total_current * 100) if total_current > 0 else 0
 
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric("Current Monthly", f"${total_current:,.0f}")
-
-with col2:
-    st.metric("After Optimization", f"${total_optimized:,.0f}")
-
-with col3:
-    st.metric("Monthly Savings", f"${total_savings:,.0f}",
-              delta=f"-{(total_savings/total_current*100):.1f}%" if total_current > 0 else None,
-              delta_color="inverse")
-
-with col4:
-    st.metric("Yearly Savings", f"${total_savings * 12:,.0f}")
+st.markdown(metrics_row([
+    ("💵", f"${total_current:,.0f}", "Current Monthly", "orange"),
+    ("💰", f"${total_optimized:,.0f}", "After Optimization", "green"),
+    ("📉", f"${total_savings:,.0f}", "Monthly Savings", "green"),
+    ("📅", f"${total_savings * 12:,.0f}", "Yearly Savings", "green"),
+]), unsafe_allow_html=True)
 
 st.divider()
 
 # Current vs Optimized comparison
-st.header("Spend Comparison")
+section_header("Spend Comparison")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    # Bar chart
+    chart_header("Current vs. Optimized Monthly Spend")
     fig = go.Figure(data=[
-        go.Bar(name='Current', x=['Monthly Spend'], y=[total_current], marker_color='#6c757d'),
-        go.Bar(name='Optimized', x=['Monthly Spend'], y=[total_optimized], marker_color='#28a745')
+        go.Bar(name='Current', x=['Monthly Spend'], y=[total_current], marker_color='#f59e0b'),
+        go.Bar(name='Optimized', x=['Monthly Spend'], y=[total_optimized], marker_color='#10b981')
     ])
     fig.update_layout(
-        title="Current vs. Optimized Monthly Spend",
         barmode='group',
-        height=350
+        height=350,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#94a3b8'),
+        xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+        yaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    # Savings waterfall
+    chart_header("Savings Waterfall")
     fig = go.Figure(go.Waterfall(
         name="Savings",
         orientation="v",
@@ -79,44 +95,57 @@ with col2:
         x=["Current Spend", "Savings", "Optimized Spend"],
         text=[f"${total_current:,.0f}", f"-${total_savings:,.0f}", f"${total_optimized:,.0f}"],
         y=[total_current, -total_savings, total_optimized],
-        connector={"line": {"color": "rgb(63, 63, 63)"}},
-        decreasing={"marker": {"color": "#28a745"}},
-        increasing={"marker": {"color": "#dc3545"}},
-        totals={"marker": {"color": "#1f77b4"}}
+        connector={"line": {"color": "rgba(255,255,255,0.2)"}},
+        decreasing={"marker": {"color": "#10b981"}},
+        increasing={"marker": {"color": "#ef4444"}},
+        totals={"marker": {"color": "#3b82f6"}}
     ))
     fig.update_layout(
-        title="Savings Waterfall",
-        height=350
+        height=350,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#94a3b8'),
+        xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+        yaxis=dict(gridcolor='rgba(255,255,255,0.05)')
     )
     st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
 # Cost breakdown by instance type
-st.header("Cost Breakdown")
+section_header("Cost Breakdown")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### By Instance Type")
+    chart_header("By Instance Type")
 
     by_type = df.groupby("instance_type")["current_monthly"].sum().sort_values(ascending=False).head(10)
 
-    fig = px.pie(
+    fig = go.Figure(data=[go.Pie(
+        labels=by_type.index,
         values=by_type.values,
-        names=by_type.index,
-        title="Top 10 Instance Types by Spend"
+        hole=0.5,
+        marker_colors=['#FF9900', '#f59e0b', '#fbbf24', '#fcd34d', '#fde68a',
+                       '#10b981', '#34d399', '#6ee7b7', '#a7f3d0', '#d1fae5'],
+        textinfo='label+percent',
+        textfont_size=11
+    )])
+    fig.update_layout(
+        height=400,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#94a3b8'),
+        showlegend=False
     )
-    fig.update_layout(height=400)
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    st.markdown("### By Classification")
+    chart_header("By Classification")
 
     if "classification" in df.columns:
         by_class = df.groupby("classification").agg({
             "current_monthly": "sum",
-            "monthly_savings": lambda x: x[x > 0].sum() if "monthly_savings" in df.columns else 0
         }).reset_index()
 
         fig = px.bar(
@@ -125,20 +154,31 @@ with col2:
             y="current_monthly",
             color="classification",
             color_discrete_map={
-                "oversized": "#28a745",
-                "right_sized": "#6c757d",
-                "undersized": "#dc3545",
-                "unknown": "#ffc107"
+                "oversized": "#10b981",
+                "right_sized": "#64748b",
+                "undersized": "#ef4444",
+                "unknown": "#f59e0b"
             },
-            title="Spend by Classification"
+            text="current_monthly"
         )
-        fig.update_layout(height=400, showlegend=False)
+        fig.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
+        fig.update_layout(
+            height=400,
+            showlegend=False,
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#94a3b8'),
+            xaxis=dict(gridcolor='rgba(255,255,255,0.05)', title=""),
+            yaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Monthly Spend ($)")
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-# Savings by GSI
-st.header("Savings by GSI/Cost Center")
+st.divider()
 
-tag_columns = [c for c in df.columns if c.upper() in ["GSI", "COST_CENTER", "PROJECT"]]
+# Savings by Environment/Tag
+section_header("Savings by Environment")
+
+tag_columns = [c for c in df.columns if c.upper() in ["GSI", "COST_CENTER", "PROJECT", "ENVIRONMENT"]]
 
 if tag_columns and "monthly_savings" in df.columns:
     tag_col = tag_columns[0]
@@ -153,19 +193,28 @@ if tag_columns and "monthly_savings" in df.columns:
         y=tag_col,
         x="monthly_savings",
         orientation="h",
-        title=f"Monthly Savings by {tag_col}",
         color="monthly_savings",
-        color_continuous_scale="Greens"
+        color_continuous_scale=[[0, '#064e3b'], [1, '#10b981']],
+        text="monthly_savings"
     )
-    fig.update_layout(height=500)
+    fig.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
+    fig.update_layout(
+        height=500,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#94a3b8'),
+        xaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Monthly Savings ($)"),
+        yaxis=dict(gridcolor='rgba(255,255,255,0.05)', title=""),
+        coloraxis_showscale=False
+    )
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("No GSI/Cost Center tag data available for breakdown.")
+    st.info("No environment/tag data available for breakdown.")
 
 st.divider()
 
 # 12-month projection
-st.header("12-Month Savings Projection")
+section_header("12-Month Savings Projection")
 
 months = list(range(1, 13))
 month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -179,9 +228,9 @@ fig.add_trace(go.Scatter(
     y=cumulative,
     mode='lines+markers',
     name='Cumulative Savings',
-    line=dict(color='#28a745', width=3),
+    line=dict(color='#10b981', width=3),
     fill='tozeroy',
-    fillcolor='rgba(40, 167, 69, 0.2)'
+    fillcolor='rgba(16, 185, 129, 0.15)'
 ))
 
 fig.add_trace(go.Scatter(
@@ -189,20 +238,25 @@ fig.add_trace(go.Scatter(
     y=[total_savings] * 12,
     mode='lines',
     name='Monthly Savings',
-    line=dict(color='#1f77b4', dash='dash')
+    line=dict(color='#FF9900', dash='dash', width=2)
 ))
 
 fig.update_layout(
-    title="Projected Savings Over 12 Months",
     xaxis_title="Month",
     yaxis_title="Savings ($)",
-    height=400
+    height=400,
+    paper_bgcolor='rgba(0,0,0,0)',
+    plot_bgcolor='rgba(0,0,0,0)',
+    font=dict(color='#94a3b8'),
+    xaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+    yaxis=dict(gridcolor='rgba(255,255,255,0.05)'),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # Summary table
-st.subheader("Monthly Projection Details")
+chart_header("Monthly Projection Details")
 
 projection_data = []
 running_total = 0

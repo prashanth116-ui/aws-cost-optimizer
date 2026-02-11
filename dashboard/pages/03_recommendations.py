@@ -3,45 +3,68 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from styles import inject_styles, page_header, section_header, metrics_row
 
 st.set_page_config(page_title="Recommendations", page_icon="💡", layout="wide")
+inject_styles()
 
-st.title("Rightsizing Recommendations")
+page_header("💡 Rightsizing Recommendations", "Optimize your AWS resources for cost and performance")
 
 
 def load_data():
     """Load data from session state."""
+    if "sample_df" in st.session_state:
+        return st.session_state["sample_df"]
     if "report_file" in st.session_state:
-        return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        try:
+            return pd.read_excel(st.session_state["report_file"], sheet_name="Server Details")
+        except:
+            return None
     return None
 
 
 df = load_data()
 
 if df is None:
-    st.info("Please upload a report from the main page to view recommendations.")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>No data loaded.</strong> Please go to the Home page and load sample data or upload a report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # Filter to servers with recommendations
 if "recommended_type" not in df.columns:
-    st.warning("No recommendation data available in this report.")
+    st.markdown("""
+    <div class="info-box warning">
+        <strong>No recommendation data</strong> available in this report.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 recs_df = df[df["recommended_type"].notna()].copy()
 
 if len(recs_df) == 0:
-    st.success("All servers are appropriately sized! No recommendations needed.")
+    st.markdown("""
+    <div class="info-box success">
+        <strong>All servers are appropriately sized!</strong> No recommendations needed.
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # Sidebar filters
-st.sidebar.header("Filters")
+st.sidebar.markdown("### Filters")
 
 # Risk level filter
 if "risk_level" in recs_df.columns:
     risk_levels = st.sidebar.multiselect(
         "Risk Level",
         options=recs_df["risk_level"].unique(),
-        default=["low", "medium"] if set(["low", "medium"]).issubset(recs_df["risk_level"].unique()) else recs_df["risk_level"].unique()
+        default=["low", "medium"] if set(["low", "medium"]).issubset(recs_df["risk_level"].unique()) else list(recs_df["risk_level"].unique())
     )
     recs_df = recs_df[recs_df["risk_level"].isin(risk_levels)]
 
@@ -66,96 +89,108 @@ if "confidence" in recs_df.columns:
     recs_df = recs_df[recs_df["confidence"] >= min_confidence]
 
 # Summary metrics
-st.header("Recommendation Summary")
+section_header("Recommendation Summary")
 
-col1, col2, col3, col4 = st.columns(4)
+total_savings = recs_df[recs_df["monthly_savings"] > 0]["monthly_savings"].sum() if "monthly_savings" in recs_df.columns else 0
+yearly_savings = total_savings * 12
+low_risk = len(recs_df[recs_df["risk_level"] == "low"]) if "risk_level" in recs_df.columns else 0
 
-with col1:
-    st.metric("Servers with Recommendations", len(recs_df))
-
-with col2:
-    total_savings = recs_df[recs_df["monthly_savings"] > 0]["monthly_savings"].sum()
-    st.metric("Total Monthly Savings", f"${total_savings:,.0f}")
-
-with col3:
-    yearly_savings = total_savings * 12
-    st.metric("Total Yearly Savings", f"${yearly_savings:,.0f}")
-
-with col4:
-    low_risk = len(recs_df[recs_df["risk_level"] == "low"]) if "risk_level" in recs_df.columns else 0
-    st.metric("Low Risk Changes", low_risk)
+st.markdown(metrics_row([
+    ("📋", len(recs_df), "With Recommendations"),
+    ("💵", f"${total_savings:,.0f}", "Monthly Savings", "green"),
+    ("📅", f"${yearly_savings:,.0f}", "Yearly Savings", "green"),
+    ("✅", low_risk, "Low Risk", "green"),
+]), unsafe_allow_html=True)
 
 st.divider()
 
 # Implementation phases
-st.header("Implementation Phases")
+section_header("Implementation Phases")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.markdown("### Quick Wins")
+    st.markdown('<div class="chart-title">Quick Wins</div>', unsafe_allow_html=True)
     st.caption("Low risk, high confidence")
 
     quick_wins = recs_df[
         (recs_df["risk_level"] == "low") &
         (recs_df["confidence"] >= 0.7) &
         (recs_df["monthly_savings"] > 0)
-    ] if "risk_level" in recs_df.columns else pd.DataFrame()
+    ] if "risk_level" in recs_df.columns and "confidence" in recs_df.columns else pd.DataFrame()
 
     if len(quick_wins) > 0:
         qw_savings = quick_wins["monthly_savings"].sum()
-        st.success(f"**{len(quick_wins)}** servers")
-        st.success(f"**${qw_savings:,.0f}** monthly savings")
+        st.markdown(f"""
+        <div class="info-box success">
+            <strong>{len(quick_wins)}</strong> servers | <strong>${qw_savings:,.0f}</strong>/month
+        </div>
+        """, unsafe_allow_html=True)
 
         st.dataframe(
             quick_wins[["hostname", "instance_type", "recommended_type", "monthly_savings"]].head(10),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            column_config={
+                "monthly_savings": st.column_config.NumberColumn("Savings", format="$%.0f")
+            }
         )
     else:
         st.info("No quick wins identified")
 
 with col2:
-    st.markdown("### Medium Term")
+    st.markdown('<div class="chart-title">Medium Term</div>', unsafe_allow_html=True)
     st.caption("Moderate risk or confidence")
 
     medium_term = recs_df[
         ((recs_df["risk_level"] == "medium") |
          ((recs_df["confidence"] >= 0.5) & (recs_df["confidence"] < 0.7))) &
         (recs_df["monthly_savings"] > 0)
-    ] if "risk_level" in recs_df.columns else pd.DataFrame()
+    ] if "risk_level" in recs_df.columns and "confidence" in recs_df.columns else pd.DataFrame()
 
     if len(medium_term) > 0:
         mt_savings = medium_term["monthly_savings"].sum()
-        st.warning(f"**{len(medium_term)}** servers")
-        st.warning(f"**${mt_savings:,.0f}** monthly savings")
+        st.markdown(f"""
+        <div class="info-box warning">
+            <strong>{len(medium_term)}</strong> servers | <strong>${mt_savings:,.0f}</strong>/month
+        </div>
+        """, unsafe_allow_html=True)
 
         st.dataframe(
             medium_term[["hostname", "instance_type", "recommended_type", "monthly_savings"]].head(10),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            column_config={
+                "monthly_savings": st.column_config.NumberColumn("Savings", format="$%.0f")
+            }
         )
     else:
         st.info("No medium term changes identified")
 
 with col3:
-    st.markdown("### Long Term")
+    st.markdown('<div class="chart-title">Long Term</div>', unsafe_allow_html=True)
     st.caption("Higher risk, requires validation")
 
     long_term = recs_df[
         (recs_df["risk_level"] == "high") |
         (recs_df["confidence"] < 0.5)
-    ] if "risk_level" in recs_df.columns else pd.DataFrame()
+    ] if "risk_level" in recs_df.columns and "confidence" in recs_df.columns else pd.DataFrame()
 
     if len(long_term) > 0:
         lt_savings = long_term[long_term["monthly_savings"] > 0]["monthly_savings"].sum()
-        st.error(f"**{len(long_term)}** servers")
-        st.error(f"**${lt_savings:,.0f}** monthly savings")
+        st.markdown(f"""
+        <div class="info-box error">
+            <strong>{len(long_term)}</strong> servers | <strong>${lt_savings:,.0f}</strong>/month
+        </div>
+        """, unsafe_allow_html=True)
 
         st.dataframe(
             long_term[["hostname", "instance_type", "recommended_type", "monthly_savings"]].head(10),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            column_config={
+                "monthly_savings": st.column_config.NumberColumn("Savings", format="$%.0f")
+            }
         )
     else:
         st.info("No long term changes identified")
@@ -163,25 +198,32 @@ with col3:
 st.divider()
 
 # Full recommendations table
-st.header("All Recommendations")
+section_header("All Recommendations")
 
-# Sort options
-sort_by = st.selectbox(
-    "Sort by:",
-    options=["monthly_savings", "confidence", "hostname"],
-    index=0
-)
-
-sort_ascending = st.checkbox("Ascending", value=False)
+col1, col2 = st.columns([3, 1])
+with col1:
+    sort_by = st.selectbox(
+        "Sort by:",
+        options=["monthly_savings", "confidence", "hostname"],
+        index=0
+    )
+with col2:
+    sort_ascending = st.checkbox("Ascending", value=False)
 
 recs_sorted = recs_df.sort_values(sort_by, ascending=sort_ascending)
 
+display_cols = ["hostname", "instance_type", "recommended_type", "classification", "monthly_savings"]
+if "yearly_savings" in recs_sorted.columns:
+    display_cols.append("yearly_savings")
+if "confidence" in recs_sorted.columns:
+    display_cols.append("confidence")
+if "risk_level" in recs_sorted.columns:
+    display_cols.append("risk_level")
+if "reason" in recs_sorted.columns:
+    display_cols.append("reason")
+
 st.dataframe(
-    recs_sorted[[
-        "hostname", "instance_type", "recommended_type",
-        "classification", "monthly_savings", "yearly_savings",
-        "confidence", "risk_level", "reason"
-    ]],
+    recs_sorted[display_cols],
     use_container_width=True,
     height=400,
     column_config={
@@ -194,7 +236,7 @@ st.dataframe(
 # Download button
 csv = recs_sorted.to_csv(index=False)
 st.download_button(
-    label="Download Recommendations CSV",
+    label="📥 Download Recommendations CSV",
     data=csv,
     file_name="rightsizing_recommendations.csv",
     mime="text/csv"
