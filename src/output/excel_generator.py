@@ -13,6 +13,9 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 from .report_data import ReportDataBuilder, ServerReport
 
+# Import Optional for type hints
+from typing import Optional
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,11 +47,12 @@ class ExcelGenerator:
         # Remove default sheet
         self.workbook.remove(self.workbook.active)
 
-    def generate(self, report_builder: ReportDataBuilder) -> Path:
+    def generate(self, report_builder: ReportDataBuilder, anomaly_data: Optional[Dict] = None) -> Path:
         """Generate the complete Excel report.
 
         Args:
             report_builder: ReportDataBuilder with all data
+            anomaly_data: Optional anomaly detection results
 
         Returns:
             Path to generated file
@@ -61,6 +65,10 @@ class ExcelGenerator:
         self._create_recommendations_sheet(data["servers"])
         self._create_cost_analysis_sheet(data)
         self._create_contention_sheet(data["contention"])
+
+        # Create anomalies sheet if data provided
+        if anomaly_data:
+            self._create_anomalies_sheet(anomaly_data)
 
         # Save workbook
         self.workbook.save(self.output_path)
@@ -379,6 +387,124 @@ class ExcelGenerator:
         ws.column_dimensions["D"].width = 18
         ws.column_dimensions["E"].width = 12
         ws.column_dimensions["F"].width = 12
+        ws.column_dimensions["G"].width = 15
+
+    def _create_anomalies_sheet(self, anomaly_data: Dict[str, Any]) -> None:
+        """Create the Cost Anomalies sheet.
+
+        Args:
+            anomaly_data: Anomaly detection results from CostAnomalyDetector
+        """
+        ws = self.workbook.create_sheet("Cost Anomalies")
+
+        # Title
+        ws["A1"] = "Cost Anomaly Detection"
+        ws["A1"].font = Font(size=14, bold=True)
+
+        # Summary
+        row = 3
+        ws.cell(row=row, column=1, value="Detection Period").font = Font(bold=True)
+        detection_period = anomaly_data.get("detection_period", {})
+        period_str = f"{detection_period.get('start', 'N/A')[:10]} to {detection_period.get('end', 'N/A')[:10]}"
+        ws.cell(row=row, column=2, value=period_str)
+        row += 1
+
+        ws.cell(row=row, column=1, value="Total Anomalies").font = Font(bold=True)
+        ws.cell(row=row, column=2, value=anomaly_data.get("total_anomalies", 0))
+        row += 1
+
+        ws.cell(row=row, column=1, value="Critical Anomalies").font = Font(bold=True)
+        ws.cell(row=row, column=2, value=anomaly_data.get("critical_anomalies", 0))
+        row += 1
+
+        ws.cell(row=row, column=1, value="Warning Anomalies").font = Font(bold=True)
+        ws.cell(row=row, column=2, value=anomaly_data.get("warning_anomalies", 0))
+        row += 1
+
+        ws.cell(row=row, column=1, value="Total Excess Cost").font = Font(bold=True)
+        cell = ws.cell(row=row, column=2, value=anomaly_data.get("total_excess_cost", 0))
+        cell.number_format = self.CURRENCY_FORMAT
+        row += 2
+
+        # Anomalies table
+        anomalies = anomaly_data.get("top_anomalies", [])
+        if anomalies:
+            ws.cell(row=row, column=1, value="Detected Anomalies").font = Font(bold=True, size=12)
+            row += 1
+
+            headers = ["Service", "Date", "Severity", "Type", "Actual Cost", "Expected Cost", "Deviation %"]
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=row, column=col, value=header)
+                cell.fill = self.HEADER_FILL
+                cell.font = self.HEADER_FONT
+            row += 1
+
+            # Critical fill for severity
+            CRITICAL_FILL = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+            WARNING_FILL = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+
+            for anomaly in anomalies:
+                ws.cell(row=row, column=1, value=anomaly.get("service", "")[:40])
+                ws.cell(row=row, column=2, value=anomaly.get("date", "")[:10])
+
+                severity_cell = ws.cell(row=row, column=3, value=anomaly.get("severity", "").upper())
+                if anomaly.get("severity") == "critical":
+                    severity_cell.fill = CRITICAL_FILL
+                elif anomaly.get("severity") == "warning":
+                    severity_cell.fill = WARNING_FILL
+
+                ws.cell(row=row, column=4, value=anomaly.get("type", ""))
+
+                cell = ws.cell(row=row, column=5, value=anomaly.get("actual_cost", 0))
+                cell.number_format = self.CURRENCY_FORMAT
+
+                cell = ws.cell(row=row, column=6, value=anomaly.get("expected_cost", 0))
+                cell.number_format = self.CURRENCY_FORMAT
+
+                cell = ws.cell(row=row, column=7, value=anomaly.get("deviation_percent", 0) / 100)
+                cell.number_format = "+0.0%;-0.0%"
+
+                row += 1
+        else:
+            ws.cell(row=row, column=1, value="No anomalies detected in the analysis period.")
+            ws.cell(row=row, column=1).font = Font(italic=True)
+            row += 2
+
+        # Service baselines
+        baselines = anomaly_data.get("service_baselines", {})
+        if baselines:
+            row += 1
+            ws.cell(row=row, column=1, value="Service Baselines").font = Font(bold=True, size=12)
+            row += 1
+
+            headers = ["Service", "Mean Daily Cost", "Std Dev", "P95"]
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=row, column=col, value=header)
+                cell.fill = self.HEADER_FILL
+                cell.font = self.HEADER_FONT
+            row += 1
+
+            for service, baseline in baselines.items():
+                ws.cell(row=row, column=1, value=service[:40])
+
+                cell = ws.cell(row=row, column=2, value=baseline.get("mean", 0))
+                cell.number_format = self.CURRENCY_FORMAT
+
+                cell = ws.cell(row=row, column=3, value=baseline.get("std_dev", 0))
+                cell.number_format = self.CURRENCY_FORMAT
+
+                cell = ws.cell(row=row, column=4, value=baseline.get("p95", 0))
+                cell.number_format = self.CURRENCY_FORMAT
+
+                row += 1
+
+        # Adjust column widths
+        ws.column_dimensions["A"].width = 45
+        ws.column_dimensions["B"].width = 15
+        ws.column_dimensions["C"].width = 12
+        ws.column_dimensions["D"].width = 10
+        ws.column_dimensions["E"].width = 15
+        ws.column_dimensions["F"].width = 15
         ws.column_dimensions["G"].width = 15
 
 

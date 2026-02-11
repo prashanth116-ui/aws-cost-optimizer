@@ -74,3 +74,70 @@ output:
 logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Anomaly Detection settings
+anomaly_detection:
+  # Enable/disable anomaly detection
+  enabled: true
+  # Number of days to use for baseline calculation
+  baseline_days: 30
+  # Number of recent days to check for anomalies
+  detection_days: 7
+  # Detection thresholds
+  thresholds:
+    warning:
+      std_dev: 2.0      # Standard deviations from mean
+      percentage: 30    # Percentage deviation from mean
+    critical:
+      std_dev: 3.0
+      percentage: 50
+  # Services to monitor (empty = all)
+  services: []
+
+# Scheduled Reports settings
+scheduler:
+  # Enable/disable scheduler daemon
+  enabled: false
+  # Timezone for schedule execution
+  timezone: "UTC"
+
+# Notifications settings
+notifications:
+  email:
+    # SMTP server settings
+    smtp_host: "smtp.example.com"
+    smtp_port: 587
+    use_tls: true
+    # From address for reports
+    from_address: "cost-optimizer@example.com"
+  slack:
+    # Default webhook URL (can be overridden per schedule)
+    default_webhook: ""
+
+# Report schedules
+schedules:
+  # Example schedule configuration
+  # - id: "weekly-report"
+  #   name: "Weekly Cost Report"
+  #   cron: "0 8 * * MON"
+  #   report_type: "full"
+  #   recipients:
+  #     - "team@example.com"
+  #   slack_channel: "#cost-alerts"
+
+# Multi-Account (AWS Organizations) settings
+organizations:
+  # Enable/disable multi-account mode
+  enabled: false
+  # Role name to assume in member accounts
+  role_name: "CostOptimizerRole"
+  # Session duration in seconds (max 3600 for chained roles)
+  session_duration: 3600
+  # Explicit account list (empty = auto-discover from Organizations)
+  accounts: []
+  # Example:
+  # - account_id: "123456789012"
+  #   name: "Production"
+  #   role_name: "CostOptimizerRole"  # Optional, overrides default
+  # - account_id: "234567890123"
+  #   name: "Development"

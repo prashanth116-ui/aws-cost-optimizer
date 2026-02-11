@@ -100,6 +100,74 @@ def parse_args():
         help="Test connections without generating report"
     )
 
+    # Anomaly detection arguments
+    parser.add_argument(
+        "--detect-anomalies",
+        action="store_true",
+        help="Run cost anomaly detection"
+    )
+
+    parser.add_argument(
+        "--baseline-days",
+        type=int,
+        default=30,
+        help="Days of history for anomaly baseline (default: 30)"
+    )
+
+    parser.add_argument(
+        "--detection-days",
+        type=int,
+        default=7,
+        help="Recent days to check for anomalies (default: 7)"
+    )
+
+    # Scheduler arguments
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Run the scheduler daemon for automated reports"
+    )
+
+    parser.add_argument(
+        "--run-schedule",
+        type=str,
+        metavar="SCHEDULE_ID",
+        help="Execute a specific schedule immediately"
+    )
+
+    parser.add_argument(
+        "--list-schedules",
+        action="store_true",
+        help="List all configured schedules"
+    )
+
+    # Notification test arguments
+    parser.add_argument(
+        "--test-email",
+        type=str,
+        metavar="EMAIL",
+        help="Send a test email to the specified address"
+    )
+
+    parser.add_argument(
+        "--test-slack",
+        action="store_true",
+        help="Send a test Slack notification"
+    )
+
+    # Multi-account arguments
+    parser.add_argument(
+        "--multi-account",
+        action="store_true",
+        help="Enable multi-account analysis across AWS Organizations"
+    )
+
+    parser.add_argument(
+        "--validate-multi-account",
+        action="store_true",
+        help="Validate access to all configured accounts"
+    )
+
     return parser.parse_args()
 
 
@@ -222,6 +290,364 @@ def get_metrics(
         metrics_data[instance_id] = metrics
 
     return metrics_data
+
+
+def run_anomaly_detection(args, config, credentials):
+    """Run cost anomaly detection.
+
+    Args:
+        args: Command line arguments
+        config: Application configuration
+        credentials: AWS credentials
+    """
+    from src.analysis.anomaly_detector import CostAnomalyDetector
+    from src.cost.historical_costs import HistoricalCostRetriever
+
+    logger = logging.getLogger(__name__)
+    logger.info("Running cost anomaly detection...")
+
+    # Get anomaly config
+    anomaly_config = config.get("anomaly_detection", {})
+    baseline_days = args.baseline_days or anomaly_config.get("baseline_days", 30)
+    detection_days = args.detection_days or anomaly_config.get("detection_days", 7)
+    thresholds = anomaly_config.get("thresholds")
+
+    # Initialize AWS client
+    aws_creds = credentials.get("aws", {})
+    aws_client = AWSClient(
+        access_key_id=aws_creds.get("access_key_id"),
+        secret_access_key=aws_creds.get("secret_access_key"),
+        region=args.region,
+        profile_name=aws_creds.get("profile_name")
+    )
+
+    # Initialize detector and retriever
+    detector = CostAnomalyDetector(
+        thresholds=thresholds,
+        baseline_days=baseline_days,
+    )
+    retriever = HistoricalCostRetriever(aws_client)
+
+    # Get cost data
+    logger.info(f"Retrieving cost data (baseline: {baseline_days}d, detection: {detection_days}d)")
+    cost_data = retriever.get_costs_for_anomaly_detection(
+        baseline_days=baseline_days,
+        detection_days=detection_days,
+    )
+
+    # Detect anomalies
+    summary = detector.analyze_all_services(cost_data)
+    report = detector.get_anomaly_report(summary)
+
+    # Print results
+    print("\n" + "=" * 60)
+    print("COST ANOMALY DETECTION RESULTS")
+    print("=" * 60)
+    print(f"Detection Period: {report['detection_period']['start'][:10]} to {report['detection_period']['end'][:10]}")
+    print(f"Total Anomalies:  {report['total_anomalies']}")
+    print(f"  Critical:       {report['critical_anomalies']}")
+    print(f"  Warning:        {report['warning_anomalies']}")
+    print(f"Excess Cost:      ${report['total_excess_cost']:,.2f}")
+    print(f"Services Affected: {report['services_affected']}")
+    print("-" * 60)
+
+    if report['top_anomalies']:
+        print("\nTop Anomalies:")
+        for anomaly in report['top_anomalies'][:5]:
+            print(f"  [{anomaly['severity'].upper()}] {anomaly['service'][:40]}")
+            print(f"    Date: {anomaly['date'][:10]}, Type: {anomaly['type']}")
+            print(f"    Actual: ${anomaly['actual_cost']:,.2f}, Expected: ${anomaly['expected_cost']:,.2f}")
+            print(f"    Deviation: {anomaly['deviation_percent']:+.1f}%")
+            print()
+    else:
+        print("\nNo anomalies detected.")
+
+    print("=" * 60)
+
+    # Save to JSON if output specified
+    if args.output and args.output.endswith('.json'):
+        import json
+        with open(args.output, 'w') as f:
+            json.dump(report, f, indent=2, default=str)
+        print(f"\nReport saved to: {args.output}")
+
+
+def run_scheduler_daemon(args, config, credentials):
+    """Run the scheduler daemon.
+
+    Args:
+        args: Command line arguments
+        config: Application configuration
+        credentials: Credentials
+    """
+    from src.scheduler.daemon import SchedulerDaemon
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting scheduler daemon...")
+
+    daemon = SchedulerDaemon(
+        config=config,
+        credentials=credentials,
+        output_dir="reports",
+    )
+
+    daemon.start()
+
+
+def run_specific_schedule(args, config, credentials):
+    """Run a specific schedule immediately.
+
+    Args:
+        args: Command line arguments
+        config: Application configuration
+        credentials: Credentials
+    """
+    from src.scheduler.daemon import SchedulerDaemon
+
+    logger = logging.getLogger(__name__)
+    logger.info(f"Running schedule: {args.run_schedule}")
+
+    daemon = SchedulerDaemon(
+        config=config,
+        credentials=credentials,
+        output_dir="reports",
+    )
+
+    success = daemon.run_schedule(args.run_schedule)
+
+    if success:
+        print(f"Schedule '{args.run_schedule}' completed successfully.")
+    else:
+        print(f"Schedule '{args.run_schedule}' failed.")
+        sys.exit(1)
+
+
+def list_schedules(config):
+    """List all configured schedules.
+
+    Args:
+        config: Application configuration
+    """
+    schedules = config.get("schedules", [])
+
+    if not schedules:
+        print("No schedules configured.")
+        print("Add schedules to config/config.yaml")
+        return
+
+    print("\nConfigured Schedules:")
+    print("-" * 60)
+
+    for schedule in schedules:
+        enabled = "ENABLED" if schedule.get("enabled", True) else "DISABLED"
+        print(f"  ID: {schedule.get('id')}")
+        print(f"    Name: {schedule.get('name', schedule.get('id'))}")
+        print(f"    Cron: {schedule.get('cron')}")
+        print(f"    Type: {schedule.get('report_type', 'full')}")
+        print(f"    Status: {enabled}")
+        if schedule.get('recipients'):
+            print(f"    Recipients: {', '.join(schedule['recipients'])}")
+        if schedule.get('slack_channel'):
+            print(f"    Slack: {schedule['slack_channel']}")
+        print()
+
+
+def test_email_notification(args, config, credentials):
+    """Send a test email notification.
+
+    Args:
+        args: Command line arguments
+        config: Application configuration
+        credentials: Credentials
+    """
+    from src.notifications.email_sender import EmailSender, EmailConfig
+
+    email_config = config.get("notifications", {}).get("email", {})
+    email_creds = credentials.get("notifications", {}).get("email", {})
+
+    if not email_config.get("smtp_host"):
+        print("Email not configured. Add SMTP settings to config/config.yaml")
+        sys.exit(1)
+
+    sender = EmailSender(EmailConfig(
+        smtp_host=email_config.get("smtp_host"),
+        smtp_port=email_config.get("smtp_port", 587),
+        username=email_creds.get("username"),
+        password=email_creds.get("password"),
+        use_tls=email_config.get("use_tls", True),
+        from_address=email_config.get("from_address"),
+    ))
+
+    success = sender.send_alert(
+        recipients=[args.test_email],
+        subject="AWS Cost Optimizer - Test Email",
+        message="This is a test email from AWS Cost Optimizer. If you received this, email notifications are working correctly.",
+        severity="info",
+    )
+
+    if success:
+        print(f"Test email sent successfully to {args.test_email}")
+    else:
+        print("Failed to send test email. Check your SMTP configuration.")
+        sys.exit(1)
+
+
+def test_slack_notification(config):
+    """Send a test Slack notification.
+
+    Args:
+        config: Application configuration
+    """
+    from src.notifications.slack_notifier import SlackNotifier
+
+    webhook = config.get("notifications", {}).get("slack", {}).get("default_webhook")
+
+    if not webhook:
+        print("Slack not configured. Add webhook URL to config/config.yaml")
+        sys.exit(1)
+
+    notifier = SlackNotifier(webhook)
+    success = notifier.test_connection()
+
+    if success:
+        print("Test Slack notification sent successfully!")
+    else:
+        print("Failed to send Slack notification. Check your webhook URL.")
+        sys.exit(1)
+
+
+def run_multi_account_analysis(args, config, credentials):
+    """Run multi-account analysis.
+
+    Args:
+        args: Command line arguments
+        config: Application configuration
+        credentials: Credentials
+    """
+    from src.clients.organizations_client import OrganizationsClient
+    from src.clients.multi_account_client import MultiAccountClient
+    from src.output.multi_account_report import MultiAccountReportBuilder, MultiAccountExcelGenerator
+
+    logger = logging.getLogger(__name__)
+    logger.info("Running multi-account analysis...")
+
+    org_config = config.get("organizations", {})
+    aws_creds = credentials.get("aws", {})
+
+    # Initialize organizations client
+    org_client = OrganizationsClient(
+        access_key_id=aws_creds.get("access_key_id"),
+        secret_access_key=aws_creds.get("secret_access_key"),
+        profile_name=aws_creds.get("profile_name"),
+        default_role_name=org_config.get("role_name", "CostOptimizerRole"),
+        session_duration=org_config.get("session_duration", 3600),
+    )
+
+    # Discover accounts
+    explicit_accounts = org_config.get("accounts")
+    accounts = org_client.discover_accounts(explicit_accounts)
+
+    if not accounts:
+        print("No accounts found. Configure accounts in config/config.yaml or enable AWS Organizations.")
+        sys.exit(1)
+
+    print(f"Found {len(accounts)} accounts to analyze")
+
+    # Initialize multi-account client
+    multi_client = MultiAccountClient(
+        organizations_client=org_client,
+        max_workers=5,
+        region=args.region,
+    )
+
+    # Run analysis
+    summary = multi_client.analyze_all_accounts(accounts)
+
+    # Print summary
+    print("\n" + "=" * 60)
+    print("MULTI-ACCOUNT ANALYSIS SUMMARY")
+    print("=" * 60)
+    print(f"Total Accounts:     {summary.total_accounts}")
+    print(f"Successful:         {summary.successful_accounts}")
+    print(f"Failed:             {summary.failed_accounts}")
+    print(f"Total Instances:    {summary.total_instances}")
+    print(f"Total Monthly Cost: ${summary.total_current_monthly:,.2f}")
+    print("-" * 60)
+
+    for account_id, data in summary.by_account.items():
+        status = "OK" if data.get("status") == "success" else "FAILED"
+        print(f"  {data.get('name', account_id)[:20]:<20} [{status}]")
+        if data.get("status") == "success":
+            print(f"    Instances: {data.get('instance_count', 0)}, Cost: ${data.get('monthly_cost', 0):,.2f}")
+        else:
+            print(f"    Error: {data.get('error', 'Unknown')[:40]}")
+
+    print("=" * 60)
+
+    # Generate report if output specified
+    if args.output:
+        report_builder = MultiAccountReportBuilder()
+
+        # Add account data to builder
+        for result in summary.accounts:
+            if result.success:
+                # Build server reports for each instance
+                server_reports = []
+                # Note: Full analysis would be done here
+                report_builder.add_account_data(result, server_reports)
+
+        generator = MultiAccountExcelGenerator(args.output)
+        generator.generate(report_builder)
+        print(f"\nReport saved to: {args.output}")
+
+
+def validate_multi_account_access(args, config, credentials):
+    """Validate access to all configured accounts.
+
+    Args:
+        args: Command line arguments
+        config: Application configuration
+        credentials: Credentials
+    """
+    from src.clients.organizations_client import OrganizationsClient
+    from src.clients.multi_account_client import MultiAccountClient
+
+    logger = logging.getLogger(__name__)
+    logger.info("Validating multi-account access...")
+
+    org_config = config.get("organizations", {})
+    aws_creds = credentials.get("aws", {})
+
+    org_client = OrganizationsClient(
+        access_key_id=aws_creds.get("access_key_id"),
+        secret_access_key=aws_creds.get("secret_access_key"),
+        profile_name=aws_creds.get("profile_name"),
+        default_role_name=org_config.get("role_name", "CostOptimizerRole"),
+    )
+
+    # Discover accounts
+    accounts = org_client.discover_accounts(org_config.get("accounts"))
+
+    if not accounts:
+        print("No accounts found.")
+        return
+
+    multi_client = MultiAccountClient(org_client)
+    access_status = multi_client.validate_access(accounts)
+
+    print("\nAccount Access Validation:")
+    print("-" * 60)
+
+    accessible = 0
+    for account in accounts:
+        status = access_status.get(account.account_id, False)
+        icon = "OK" if status else "FAILED"
+        print(f"  {account.name[:30]:<30} ({account.account_id}): {icon}")
+        if status:
+            accessible += 1
+
+    print("-" * 60)
+    print(f"Accessible: {accessible}/{len(accounts)} accounts")
 
 
 def run_analysis(args):
@@ -414,8 +840,37 @@ def main():
     """Main entry point."""
     args = parse_args()
 
+    # Set up logging early for all commands
+    logger = setup_logging("DEBUG" if args.verbose else "INFO")
+
+    # Load config and credentials for commands that need them
+    try:
+        config = load_config(args.config)
+        credentials = load_credentials(args.credentials)
+    except FileNotFoundError as e:
+        # Some commands don't need config
+        config = {}
+        credentials = {}
+
+    # Route to appropriate command
     if args.dashboard:
         launch_dashboard()
+    elif args.detect_anomalies:
+        run_anomaly_detection(args, config, credentials)
+    elif args.daemon:
+        run_scheduler_daemon(args, config, credentials)
+    elif args.run_schedule:
+        run_specific_schedule(args, config, credentials)
+    elif args.list_schedules:
+        list_schedules(config)
+    elif args.test_email:
+        test_email_notification(args, config, credentials)
+    elif args.test_slack:
+        test_slack_notification(config)
+    elif args.multi_account:
+        run_multi_account_analysis(args, config, credentials)
+    elif args.validate_multi_account:
+        validate_multi_account_access(args, config, credentials)
     else:
         run_analysis(args)
 
